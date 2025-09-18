@@ -1,6 +1,6 @@
 #!/bin/bash
-# Kyutai STT - Simple Vast.ai Deployment (Testing Only)
-# No autoscaling, no complex features - just basic live transcription
+# Kyutai STT - Container Deployment (PyTorch/CUDA containers)
+# Optimized for Vast.ai PyTorch containers - no Docker installation needed
 
 set -e
 
@@ -8,7 +8,7 @@ set -e
 PROJECT_NAME="kyutai-stt"
 API_PORT=${API_PORT:-8000}
 BATCH_SIZE=${BATCH_SIZE:-80}
-API_KEY=${API_KEY:-$(openssl rand -hex 16)}
+API_KEY=${API_KEY:-$(openssl rand -hex 16 2>/dev/null || echo "public_token")}
 
 # Colors
 RED='\033[0;31m'
@@ -25,38 +25,23 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # Banner
 cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
-║                 KYUTAI STT SIMPLE DEPLOYER                  ║
-║                   Testing on Vast.ai                        ║
+║                 KYUTAI STT CONTAINER DEPLOYER               ║
+║                   For PyTorch/CUDA Containers               ║
 ║                                                              ║
 ║  🎤 Live WebSocket transcription only                        ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_info "Starting simple deployment for testing..."
+log_info "Starting container deployment for testing..."
 
 # Check if we're in a container
 if [ -f /.dockerenv ]; then
-    log_info "🐳 Detected container environment - switching to container-optimized deployment"
-    curl -sSL https://raw.githubusercontent.com/spanDevOps/kyutai/main/container-deploy.sh | bash
-    exit $?
+    log_info "✅ Detected container environment - using container-optimized deployment"
+    CONTAINER_MODE=true
+else
+    log_warning "Not in container - this script is optimized for containers"
+    CONTAINER_MODE=false
 fi
-
-# Validate environment (for VM deployment)
-if [ "$EUID" -ne 0 ]; then
-    log_error "This script must be run as root. Use: sudo bash"
-    exit 1
-fi
-
-# Pre-install curl for connectivity check
-apt update -qq
-apt install -y -qq curl openssl
-
-# Check internet connectivity
-if ! curl -s --connect-timeout 5 google.com &> /dev/null; then
-    log_error "No internet connection detected. Please check your network."
-    exit 1
-fi
-log_success "Internet connectivity verified"
 
 # Check GPU
 if command -v nvidia-smi &> /dev/null; then
@@ -73,104 +58,61 @@ else
     exit 1
 fi
 
-# Install dependencies
+# Install system dependencies
 log_info "Installing system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
-apt upgrade -y -qq
-apt install -y -qq wget git docker.io
+apt update -qq
+apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake
 
-# Install Docker Compose v2
-if ! command -v docker-compose &> /dev/null; then
-    log_info "Installing Docker Compose v2..."
-    DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4)
-    curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-    log_success "Docker Compose v2 installed"
+# Install Rust
+if ! command -v cargo &> /dev/null; then
+    log_info "Installing Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.75.0 --profile minimal
+    source ~/.cargo/env
+    export PATH="$HOME/.cargo/bin:$PATH"
+    log_success "Rust installed"
 else
-    log_success "Docker Compose already installed"
+    log_success "Rust already available"
+    source ~/.cargo/env 2>/dev/null || true
+    export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
-# Install NVIDIA Container Toolkit
-log_info "Installing NVIDIA Container Toolkit..."
-distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
-    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-    tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-apt update -qq && apt install -y -qq nvidia-container-toolkit
-nvidia-ctk runtime configure --runtime=docker
-systemctl restart docker
+# Install Python dependencies
+log_info "Installing Python dependencies..."
+pip install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
 
-# Setup project
-PROJECT_DIR="/opt/$PROJECT_NAME"
+# Setup project directory
+PROJECT_DIR="/workspace/$PROJECT_NAME"
 log_info "Setting up project directory: $PROJECT_DIR"
 mkdir -p "$PROJECT_DIR"
 cd "$PROJECT_DIR"
 
-# Create simple docker-compose.yml
-log_info "Creating Docker configuration..."
-cat > docker-compose.yml << EOF
-version: '3.8'
+# Download Kyutai configs
+log_info "Downloading Kyutai configuration files..."
+if git clone --depth 1 https://github.com/kyutai-labs/delayed-streams-modeling.git temp_kyutai; then
+    cp -r temp_kyutai/configs ./
+    rm -rf temp_kyutai
+    log_success "Configuration files downloaded"
+else
+    log_error "Failed to download configuration files"
+    exit 1
+fi
 
-services:
-  kyutai-stt:
-    build: .
-    container_name: ${PROJECT_NAME}-server
-    restart: unless-stopped
-    
-    ports:
-      - "${API_PORT}:8000"
-    
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - API_KEY=${API_KEY}
-      - BATCH_SIZE=${BATCH_SIZE}
-    
-    volumes:
-      - model_cache:/root/.cache/huggingface
-      - ./logs:/app/logs
-    
-    runtime: nvidia
+# Update configuration
+log_info "Updating configuration..."
+sed -i "s/batch_size = 64/batch_size = ${BATCH_SIZE}/" configs/config-stt-en_fr-hf.toml
+sed -i "s/public_token/${API_KEY}/" configs/config-stt-en_fr-hf.toml
 
-volumes:
-  model_cache:
-    driver: local
-EOF
+# Install moshi-server
+log_info "Installing moshi-server (this may take 5-10 minutes)..."
+source ~/.cargo/env
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo install --features cuda moshi-server
+log_success "moshi-server installed"
 
-# Create simple Dockerfile
-cat > Dockerfile << EOF
-FROM nvidia/cuda:12.1-devel-ubuntu22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV RUST_VERSION=1.75.0
-ENV RUSTUP_HOME=/opt/rust
-ENV CARGO_HOME=/opt/rust
-ENV PATH=/opt/rust/bin:\$PATH
-
-# Install dependencies
-RUN apt-get update && apt-get install -y \\
-    curl wget git build-essential pkg-config libssl-dev \\
-    python3 python3-pip python3-dev cmake \\
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \\
-    sh -s -- -y --default-toolchain \$RUST_VERSION --profile minimal
-RUN chmod -R a+w /opt/rust
-
-# Install Python dependencies
-RUN pip3 install --no-cache-dir \\
-    fastapi uvicorn[standard] websockets msgpack \\
-    soundfile numpy
-
-WORKDIR /app
-
-# Copy configs (downloaded by build script)
-COPY configs/ ./configs/
-
-# Create live_api_server.py inline
-RUN cat > live_api_server.py << 'PYTHON_EOF'
+# Create API server
+log_info "Creating live API server..."
+cat > live_api_server.py << 'PYTHON_EOF'
 #!/usr/bin/env python3
 import asyncio
 import websockets
@@ -291,29 +233,24 @@ if __name__ == "__main__":
     uvicorn.run("live_api_server:app", host="0.0.0.0", port=8000, log_level="info")
 PYTHON_EOF
 
-# Create docker-entrypoint.sh inline
-RUN cat > docker-entrypoint.sh << 'BASH_EOF'
+# Create startup script
+log_info "Creating startup script..."
+cat > start_services.sh << 'BASH_EOF'
 #!/bin/bash
 set -e
-echo "🚀 Kyutai STT Starting..."
-echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits 2>/dev/null || echo 'Not available')"
-echo "Batch Size: ${BATCH_SIZE:-80}"
+export PATH="$HOME/.cargo/bin:$PATH"
 
-if command -v nvidia-smi &> /dev/null; then
-    echo "⏳ Waiting for GPU..."
-    for i in {1..30}; do
-        if nvidia-smi &> /dev/null; then
-            echo "✅ GPU ready!"
-            break
-        fi
-        sleep 2
-    done
-fi
+echo "🚀 Starting Kyutai STT services..."
+echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits 2>/dev/null || echo 'Not available')"
+echo "Batch Size: BATCH_SIZE_PLACEHOLDER"
+
+cd PROJECT_DIR_PLACEHOLDER
 
 echo "🎯 Starting moshi-server..."
-/opt/rust/bin/moshi-server worker --config configs/config-stt-en_fr-hf.toml &
+$HOME/.cargo/bin/moshi-server worker --config configs/config-stt-en_fr-hf.toml &
+MOSHI_PID=$!
 
-echo "⏳ Waiting for moshi-server..."
+echo "⏳ Waiting for moshi-server to be ready..."
 for i in {1..120}; do
     if ps aux | grep -q "[m]oshi-server worker"; then
         echo "✅ moshi-server ready!"
@@ -326,123 +263,56 @@ for i in {1..120}; do
     sleep 2
 done
 
-echo "🌐 Starting API server..."
-exec python3 live_api_server.py
+echo "🌐 Starting Live Transcription API server..."
+export API_KEY="API_KEY_PLACEHOLDER"
+python3 live_api_server.py &
+API_PID=$!
+
+# Wait for API server
+sleep 10
+
+# Get container IP
+CONTAINER_IP=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "localhost")
+
+echo ""
+echo "🎉 DEPLOYMENT COMPLETED!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🌐 Live Transcription API:"
+echo "   • WebSocket: ws://${CONTAINER_IP}:8000/ws/live"
+echo "   • Demo Page: http://${CONTAINER_IP}:8000/demo"
+echo "   • Health: http://${CONTAINER_IP}:8000/health"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔑 API Key: API_KEY_PLACEHOLDER"
+echo "📊 Batch Size: BATCH_SIZE_PLACEHOLDER"
+echo "📊 GPU Memory: GPU_MEMORY_PLACEHOLDERMb"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "✅ Ready for live transcription testing!"
+echo "Share the WebSocket URL with your colleagues:"
+echo "ws://${CONTAINER_IP}:8000/ws/live"
+echo ""
+echo "🛠️  Management commands:"
+echo "   • View logs: tail -f /workspace/kyutai-stt/logs/*.log"
+echo "   • Stop services: pkill -f moshi-server && pkill -f live_api_server"
+echo "   • Restart: ./start_services.sh"
+
+# Keep services running
+wait
 BASH_EOF
 
-RUN chmod +x docker-entrypoint.sh
+# Update startup script with actual values
+sed -i "s|PROJECT_DIR_PLACEHOLDER|${PROJECT_DIR}|g" start_services.sh
+sed -i "s/API_KEY_PLACEHOLDER/${API_KEY}/g" start_services.sh
+sed -i "s/BATCH_SIZE_PLACEHOLDER/${BATCH_SIZE}/g" start_services.sh
+sed -i "s/GPU_MEMORY_PLACEHOLDER/${GPU_MEMORY}/g" start_services.sh
 
-# Install moshi-server
-RUN /opt/rust/bin/cargo install --features cuda moshi-server
+chmod +x start_services.sh
 
-# Update batch size
-ARG BATCH_SIZE=80
-RUN sed -i "s/batch_size = 64/batch_size = \${BATCH_SIZE}/" configs/config-stt-en_fr-hf.toml
+# Create logs directory
+mkdir -p logs
 
-# Create directories
-RUN mkdir -p /app/logs
-
-EXPOSE 8000
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \\
-    CMD curl -f http://localhost:8000/health || exit 1
-
-ENTRYPOINT ["./docker-entrypoint.sh"]
-EOF
-
-# Download configs from official Kyutai repository
-log_info "Downloading configuration files..."
-if git clone --depth 1 https://github.com/kyutai-labs/delayed-streams-modeling.git temp_kyutai; then
-    cp -r temp_kyutai/configs ./
-    rm -rf temp_kyutai
-    log_success "Configuration files downloaded"
-else
-    log_error "Failed to download configuration files"
-    exit 1
-fi
-
-# Check available disk space
-AVAILABLE_SPACE=$(df . | awk 'NR==2 {print $4}')
-REQUIRED_SPACE=15000000  # 15GB in KB
-if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-    log_error "Insufficient disk space. Required: 15GB, Available: $((AVAILABLE_SPACE/1000000))GB"
-    log_error "Docker build requires significant space for Rust compilation and model cache"
-    exit 1
-fi
-log_success "Disk space check passed: $((AVAILABLE_SPACE/1000000))GB available"
-
-# Note: live_api_server.py and docker-entrypoint.sh are created above in the Dockerfile
-# They will be generated during the Docker build process
-
-# Update configuration
-sed -i "s/batch_size = 64/batch_size = ${BATCH_SIZE}/" configs/config-stt-en_fr-hf.toml
-sed -i "s/public_token/${API_KEY}/" configs/config-stt-en_fr-hf.toml
-
-# Build and start
-log_info "Building Docker image (this may take 10-15 minutes)..."
-docker-compose build --build-arg BATCH_SIZE=${BATCH_SIZE}
-
+log_success "🎉 Container deployment setup completed!"
 log_info "Starting services..."
-docker-compose up -d
 
-# Wait for services with better feedback
-log_info "Waiting for services to start (this may take 5-10 minutes for first run)..."
-log_info "Model download and container startup in progress..."
-
-# Check if container is running first
-for i in {1..60}; do
-    if docker-compose ps | grep -q "Up"; then
-        log_success "Container is running!"
-        break
-    fi
-    if [ $i -eq 60 ]; then
-        log_error "Container failed to start"
-        docker-compose logs
-        exit 1
-    fi
-    sleep 5
-done
-
-# Health check
-log_info "Checking service health..."
-for i in {1..30}; do
-    if curl -sf http://localhost:${API_PORT}/health &> /dev/null; then
-        log_success "Service is healthy!"
-        break
-    fi
-    if [ $i -eq 30 ]; then
-        log_error "Health check failed"
-        docker-compose logs
-        exit 1
-    fi
-    sleep 10
-done
-
-# Get public IP
-PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-
-# Summary
-log_success "🎉 SIMPLE DEPLOYMENT COMPLETED!"
-echo
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║                    DEPLOYMENT SUMMARY                       ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo
-log_info "🌐 Live Transcription API:"
-echo "   • WebSocket: ws://${PUBLIC_IP}:${API_PORT}/ws/live"
-echo "   • Demo Page: http://${PUBLIC_IP}:${API_PORT}/demo"
-echo "   • Health: http://${PUBLIC_IP}:${API_PORT}/health"
-echo
-log_info "🔑 Configuration:"
-echo "   • API Key: ${API_KEY}"
-echo "   • Batch Size: ${BATCH_SIZE}"
-echo "   • GPU Memory: ${GPU_MEMORY}MB"
-echo
-log_info "🛠️ Management:"
-echo "   • Logs: docker-compose logs -f"
-echo "   • Restart: docker-compose restart"
-echo "   • Stop: docker-compose down"
-echo
-log_success "✅ Ready for live transcription testing!"
-echo "Share the WebSocket URL with your colleagues:"
-echo "ws://${PUBLIC_IP}:${API_PORT}/ws/live"
+# Start services
+./start_services.sh
