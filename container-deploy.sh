@@ -67,7 +67,7 @@ apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake
 # Install Rust
 if ! command -v cargo &> /dev/null; then
     log_info "Installing Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.75.0 --profile minimal
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
     source ~/.cargo/env
     export PATH="$HOME/.cargo/bin:$PATH"
     log_success "Rust installed"
