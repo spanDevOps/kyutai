@@ -134,10 +134,21 @@ fi
 # Install NVIDIA Container Toolkit
 log_info "Installing NVIDIA Container Toolkit..."
 distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
+
+# Remove existing GPG key if present to avoid prompts
+rm -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
+
+# Install GPG key non-interactively
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+# Remove existing repository list to avoid conflicts
+rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list 2>/dev/null || true
+
+# Add repository
 curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
 apt update -qq && apt install -y -qq nvidia-container-toolkit
 nvidia-ctk runtime configure --runtime=docker
 
