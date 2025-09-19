@@ -26,11 +26,14 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                 KYUTAI STT MINIMAL DEPLOYER                 ║
 ║                   Just moshi-server + SSH                   ║
+║                          v1.1                               ║
 ║                                                              ║
 ║  🎤 Use stt_from_mic_rust_server.py from your local machine ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
+log_success "🚀 KYUTAI STT MINIMAL DEPLOYER v1.1"
+log_info "✅ Latest version with CUDA fixes and simplified deployment"
 log_info "Starting minimal deployment..."
 
 # Check if we're in a container
@@ -61,7 +64,43 @@ fi
 log_info "Installing system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -qq
-apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake python3-pip openssh-server
+apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake openssh-server
+
+# Set up CUDA environment
+log_info "Setting up CUDA environment..."
+if [ -d "/usr/local/cuda" ]; then
+    export CUDA_ROOT="/usr/local/cuda"
+    export PATH="/usr/local/cuda/bin:$PATH"
+    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+    log_success "CUDA found at /usr/local/cuda"
+elif [ -d "/opt/cuda" ]; then
+    export CUDA_ROOT="/opt/cuda"
+    export PATH="/opt/cuda/bin:$PATH"
+    export LD_LIBRARY_PATH="/opt/cuda/lib64:$LD_LIBRARY_PATH"
+    log_success "CUDA found at /opt/cuda"
+else
+    log_warning "CUDA toolkit not found in standard locations, trying to install..."
+    # Try to install CUDA toolkit
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.0-1_all.deb
+    dpkg -i cuda-keyring_1.0-1_all.deb 2>/dev/null || true
+    apt update -qq
+    apt install -y -qq cuda-toolkit-12-4 || apt install -y -qq cuda-toolkit-11-8 || log_warning "Could not install CUDA toolkit"
+    
+    if [ -d "/usr/local/cuda" ]; then
+        export CUDA_ROOT="/usr/local/cuda"
+        export PATH="/usr/local/cuda/bin:$PATH"
+        export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+    fi
+fi
+
+# Verify nvcc is available
+if command -v nvcc &> /dev/null; then
+    CUDA_VERSION=$(nvcc --version | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/')
+    log_success "nvcc found - CUDA version: $CUDA_VERSION"
+else
+    log_error "nvcc still not found - moshi-server compilation will fail"
+    log_info "Trying alternative: compile without CUDA features"
+fi
 
 # Install Rust
 if ! command -v cargo &> /dev/null; then
@@ -109,7 +148,15 @@ sed -i "s/public_token/${API_KEY}/" configs/config-stt-en_fr-hf.toml
 log_info "Installing moshi-server (this may take 5-10 minutes)..."
 source ~/.cargo/env
 export PATH="$HOME/.cargo/bin:$PATH"
-cargo install --features cuda moshi-server
+
+# Set CUDA environment for Rust compilation
+if command -v nvcc &> /dev/null; then
+    log_info "Compiling moshi-server with CUDA support..."
+    cargo install --features cuda moshi-server
+else
+    log_warning "Compiling moshi-server without CUDA (CPU-only mode)..."
+    cargo install moshi-server
+fi
 log_success "moshi-server installed"
 
 # Setup SSH for remote access
@@ -136,6 +183,17 @@ cat > start_moshi.sh << 'BASH_EOF'
 #!/bin/bash
 set -e
 export PATH="$HOME/.cargo/bin:$PATH"
+
+# Set up CUDA environment
+if [ -d "/usr/local/cuda" ]; then
+    export CUDA_ROOT="/usr/local/cuda"
+    export PATH="/usr/local/cuda/bin:$PATH"
+    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+elif [ -d "/opt/cuda" ]; then
+    export CUDA_ROOT="/opt/cuda"
+    export PATH="/opt/cuda/bin:$PATH"
+    export LD_LIBRARY_PATH="/opt/cuda/lib64:$LD_LIBRARY_PATH"
+fi
 
 echo "🚀 Starting Kyutai STT moshi-server..."
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits 2>/dev/null || echo 'Not available')"
