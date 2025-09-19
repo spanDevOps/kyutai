@@ -4,6 +4,18 @@
 
 set -e
 
+# Colors and logging functions (must be defined first)
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
 # Configuration
 PROJECT_NAME="kyutai-stt"
 BATCH_SIZE=${BATCH_SIZE:-80}
@@ -61,30 +73,19 @@ if [ "$MOSHI_PORT" -lt 1024 ] || [ "$MOSHI_PORT" -gt 65535 ]; then
     MOSHI_PORT=22093
 fi
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Banner
 cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                 KYUTAI STT MINIMAL DEPLOYER                   ║
 ║                   Just moshi-server + SSH                     ║
-║                          v1.3                                 ║
+║                          v1.4                                 ║
 ║                                                               ║
 ║  🎤 Use stt_from_mic_rust_server.py from your local machine  ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT MINIMAL DEPLOYER v1.3"
+log_success "🚀 KYUTAI STT MINIMAL DEPLOYER v1.4"
 log_info "✅ Latest version with CUDA fixes and simplified deployment"
 log_info "Starting minimal deployment..."
 
