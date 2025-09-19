@@ -79,7 +79,7 @@ fi
 
 # Install Python dependencies
 log_info "Installing Python dependencies..."
-pip install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
+pip3 install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
 
 # Setup project directory
 PROJECT_DIR="/workspace/$PROJECT_NAME"
