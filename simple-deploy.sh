@@ -34,6 +34,38 @@ EOF
 
 log_info "Starting simple deployment for testing..."
 
+# Check if this is a resumed deployment after reboot
+if [ -f "/opt/kyutai-stt/.deployment_state" ]; then
+    log_info "🔄 Detected previous deployment state - resuming..."
+    cd /opt/kyutai-stt
+    
+    # Check if services are already running
+    if docker-compose ps | grep -q "Up"; then
+        log_success "Services are already running! Skipping to completion..."
+        PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+        source .deployment_state
+        
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║                 DEPLOYMENT ALREADY COMPLETE                 ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo "🌐 WebSocket: ws://${PUBLIC_IP}:${API_PORT}/ws/live"
+        echo "🌐 Demo: http://${PUBLIC_IP}:${API_PORT}/demo"
+        echo "🔑 API Key: ${API_KEY}"
+        echo "📊 Batch Size: ${BATCH_SIZE}"
+        exit 0
+    fi
+    
+    # Resume from where we left off
+    log_info "Resuming deployment..."
+    source .deployment_state
+else
+    # Create deployment state file
+    mkdir -p /opt/kyutai-stt
+    echo "API_PORT=${API_PORT}" > /opt/kyutai-stt/.deployment_state
+    echo "BATCH_SIZE=${BATCH_SIZE}" >> /opt/kyutai-stt/.deployment_state
+    echo "API_KEY=${API_KEY}" >> /opt/kyutai-stt/.deployment_state
+fi
+
 # Check if we're in a container
 if [ -f /.dockerenv ]; then
     log_info "🐳 Detected container environment - switching to container-optimized deployment"
@@ -108,7 +140,35 @@ curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-
     tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 apt update -qq && apt install -y -qq nvidia-container-toolkit
 nvidia-ctk runtime configure --runtime=docker
-systemctl restart docker
+
+# Ensure Docker service is running properly
+log_info "Ensuring Docker service is running..."
+systemctl stop docker || true
+systemctl start docker
+sleep 5
+
+# Wait for Docker to be fully ready
+for i in {1..30}; do
+    if docker info &> /dev/null; then
+        log_success "Docker is running and ready"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        log_error "Docker failed to start properly"
+        systemctl status docker
+        journalctl -xeu docker.service | tail -20
+        exit 1
+    fi
+    sleep 2
+done
+
+# Test NVIDIA Docker integration
+log_info "Testing NVIDIA Docker integration..."
+if docker run --rm --gpus all nvidia/cuda:12.4-base-ubuntu22.04 nvidia-smi &> /dev/null; then
+    log_success "NVIDIA Docker integration working"
+else
+    log_warning "NVIDIA Docker test failed - will try alternative image"
+fi
 
 # Setup project
 PROJECT_DIR="/opt/$PROJECT_NAME"
@@ -147,9 +207,25 @@ volumes:
     driver: local
 EOF
 
+# Determine best CUDA image
+log_info "Determining compatible CUDA image..."
+CUDA_IMAGE=""
+for image in "nvidia/cuda:12.4-devel-ubuntu22.04" "nvidia/cuda:12.1-devel-ubuntu22.04" "nvidia/cuda:11.8-devel-ubuntu22.04"; do
+    if docker pull $image &> /dev/null; then
+        CUDA_IMAGE=$image
+        log_success "Using CUDA image: $CUDA_IMAGE"
+        break
+    fi
+done
+
+if [ -z "$CUDA_IMAGE" ]; then
+    log_error "No compatible CUDA image found"
+    exit 1
+fi
+
 # Create simple Dockerfile
 cat > Dockerfile << EOF
-FROM nvidia/cuda:12.1-devel-ubuntu22.04
+FROM $CUDA_IMAGE
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RUST_VERSION=1.75.0
@@ -394,12 +470,38 @@ chmod +x docker-entrypoint.sh
 sed -i "s/batch_size = 64/batch_size = ${BATCH_SIZE}/" configs/config-stt-en_fr-hf.toml
 sed -i "s/public_token/${API_KEY}/" configs/config-stt-en_fr-hf.toml
 
-# Build and start
+# Build and start with error handling
 log_info "Building Docker image (this may take 10-15 minutes)..."
-docker-compose build --build-arg BATCH_SIZE=${BATCH_SIZE}
+log_info "Progress: Downloading base image and installing dependencies..."
+
+if ! docker-compose build --build-arg BATCH_SIZE=${BATCH_SIZE} --progress=plain; then
+    log_error "Docker build failed"
+    log_info "Checking Docker logs for errors..."
+    docker-compose logs || true
+    
+    # Try to clean up and retry once
+    log_info "Cleaning up and retrying build..."
+    docker system prune -f &> /dev/null || true
+    docker-compose down &> /dev/null || true
+    
+    if ! docker-compose build --build-arg BATCH_SIZE=${BATCH_SIZE} --no-cache; then
+        log_error "Docker build failed on retry"
+        log_info "Available disk space:"
+        df -h
+        log_info "Docker info:"
+        docker info || true
+        exit 1
+    fi
+fi
+
+log_success "Docker image built successfully!"
 
 log_info "Starting services..."
-docker-compose up -d
+if ! docker-compose up -d; then
+    log_error "Failed to start services"
+    docker-compose logs
+    exit 1
+fi
 
 # Wait for services with better feedback
 log_info "Waiting for services to start (this may take 5-10 minutes for first run)..."
@@ -462,3 +564,22 @@ echo
 log_success "✅ Ready for live transcription testing!"
 echo "Share the WebSocket URL with your colleagues:"
 echo "ws://${PUBLIC_IP}:${API_PORT}/ws/live"
+
+# Mark deployment as complete
+echo "DEPLOYMENT_COMPLETE=true" >> /opt/kyutai-stt/.deployment_state
+
+# Final verification
+log_info "🔍 Final verification..."
+if curl -sf "http://localhost:${API_PORT}/health" &> /dev/null; then
+    log_success "✅ All systems operational!"
+else
+    log_warning "⚠️ Health check warning - service may still be starting"
+    log_info "Check status with: docker-compose -f /opt/kyutai-stt/docker-compose.yml logs -f"
+fi
+
+log_info "🛠️ Troubleshooting commands:"
+echo "   • Check logs: cd /opt/kyutai-stt && docker-compose logs -f"
+echo "   • Restart: cd /opt/kyutai-stt && docker-compose restart"
+echo "   • Stop: cd /opt/kyutai-stt && docker-compose down"
+echo "   • Rebuild: cd /opt/kyutai-stt && docker-compose build --no-cache"
+echo "   • Re-run script: curl -sSL https://raw.githubusercontent.com/spanDevOps/kyutai/main/simple-deploy.sh | sudo bash"
