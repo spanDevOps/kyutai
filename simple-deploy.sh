@@ -178,8 +178,55 @@ WORKDIR /app
 # Copy configs (downloaded by build script)
 COPY configs/ ./configs/
 
-# Create live_api_server.py inline
-RUN cat > live_api_server.py << 'PYTHON_EOF'
+# Create Python files by copying them in the build script
+COPY live_api_server.py .
+
+# Create entrypoint script by copying
+COPY docker-entrypoint.sh .
+RUN chmod +x docker-entrypoint.sh
+
+# Install moshi-server
+RUN /opt/rust/bin/cargo install --features cuda moshi-server
+
+# Update batch size
+ARG BATCH_SIZE=80
+RUN sed -i "s/batch_size = 64/batch_size = \${BATCH_SIZE}/" configs/config-stt-en_fr-hf.toml
+
+# Create directories
+RUN mkdir -p /app/logs
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \\
+    CMD curl -f http://localhost:8000/health || exit 1
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
+EOF
+
+# Download configs from official Kyutai repository
+log_info "Downloading configuration files..."
+if git clone --depth 1 https://github.com/kyutai-labs/delayed-streams-modeling.git temp_kyutai; then
+    cp -r temp_kyutai/configs ./
+    rm -rf temp_kyutai
+    log_success "Configuration files downloaded"
+else
+    log_error "Failed to download configuration files"
+    exit 1
+fi
+
+# Check available disk space
+AVAILABLE_SPACE=$(df . | awk 'NR==2 {print $4}')
+REQUIRED_SPACE=15000000  # 15GB in KB
+if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+    log_error "Insufficient disk space. Required: 15GB, Available: $((AVAILABLE_SPACE/1000000))GB"
+    log_error "Docker build requires significant space for Rust compilation and model cache"
+    exit 1
+fi
+log_success "Disk space check passed: $((AVAILABLE_SPACE/1000000))GB available"
+
+# Create live_api_server.py
+log_info "Creating API server file..."
+cat > live_api_server.py << 'EOF'
 #!/usr/bin/env python3
 import asyncio
 import websockets
@@ -210,7 +257,6 @@ class LiveTranscriptionService:
         self.active_connections = 0
     
     async def handle_live_transcription(self, client_websocket: WebSocket):
-        connection_start = time.time()
         self.active_connections += 1
         try:
             headers = {"kyutai-api-key": API_KEY}
@@ -294,14 +340,17 @@ async def websocket_live_transcription(websocket: WebSocket):
 
 @app.get("/demo", response_class=HTMLResponse)
 async def demo_page():
-    return '''<!DOCTYPE html><html><head><title>Kyutai STT Demo</title><style>body{font-family:Arial,sans-serif;margin:40px}.container{max-width:800px;margin:0 auto}.status{padding:10px;margin:10px 0;border-radius:5px}.connected{background-color:#d4edda;color:#155724}.disconnected{background-color:#f8d7da;color:#721c24}.transcription{background-color:#f8f9fa;padding:20px;margin:20px 0;border-radius:5px;min-height:100px}button{padding:10px 20px;margin:10px;font-size:16px}.start{background-color:#28a745;color:white;border:none;border-radius:5px}.stop{background-color:#dc3545;color:white;border:none;border-radius:5px}</style></head><body><div class="container"><h1>🎤 Kyutai STT Live Demo</h1><div id="status" class="status disconnected">Disconnected</div><button id="startBtn" class="start" onclick="startTranscription()">Start</button><button id="stopBtn" class="stop" onclick="stopTranscription()" disabled>Stop</button><h3>Live Transcription:</h3><div id="transcription" class="transcription">Click Start to begin...</div></div><script>let ws=null,audioContext=null;async function startTranscription(){try{const protocol=window.location.protocol==="https:"?"wss:":"ws:";ws=new WebSocket(`${protocol}//${window.location.host}/ws/live`);ws.onopen=()=>{document.getElementById("status").textContent="Connected";document.getElementById("status").className="status connected";document.getElementById("transcription").innerHTML="Listening..."};ws.onmessage=event=>{const data=JSON.parse(event.data);if(data.type==="word"){document.getElementById("transcription").innerHTML+=data.text+" "}};const stream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:24000,channelCount:1}});audioContext=new AudioContext({sampleRate:24000});const source=audioContext.createMediaStreamSource(stream);const processor=audioContext.createScriptProcessor(1920,1,1);processor.onaudioprocess=event=>{if(ws&&ws.readyState===WebSocket.OPEN){const inputBuffer=event.inputBuffer.getChannelData(0);ws.send(new Float32Array(inputBuffer).buffer)}};source.connect(processor);processor.connect(audioContext.destination);document.getElementById("startBtn").disabled=true;document.getElementById("stopBtn").disabled=false}catch(error){alert("Error: "+error.message)}}function stopTranscription(){if(ws){ws.close();ws=null}if(audioContext){audioContext.close();audioContext=null}document.getElementById("status").textContent="Disconnected";document.getElementById("status").className="status disconnected";document.getElementById("startBtn").disabled=false;document.getElementById("stopBtn").disabled=true}</script></body></html>'''
+    # Fixed JavaScript template literals for bash
+    html_content = """<!DOCTYPE html><html><head><title>Kyutai STT Demo</title><style>body{font-family:Arial,sans-serif;margin:40px}.container{max-width:800px;margin:0 auto}.status{padding:10px;margin:10px 0;border-radius:5px}.connected{background-color:#d4edda;color:#155724}.disconnected{background-color:#f8d7da;color:#721c24}.transcription{background-color:#f8f9fa;padding:20px;margin:20px 0;border-radius:5px;min-height:100px}button{padding:10px 20px;margin:10px;font-size:16px}.start{background-color:#28a745;color:white;border:none;border-radius:5px}.stop{background-color:#dc3545;color:white;border:none;border-radius:5px}</style></head><body><div class="container"><h1>🎤 Kyutai STT Live Demo</h1><div id="status" class="status disconnected">Disconnected</div><button id="startBtn" class="start" onclick="startTranscription()">Start</button><button id="stopBtn" class="stop" onclick="stopTranscription()" disabled>Stop</button><h3>Live Transcription:</h3><div id="transcription" class="transcription">Click Start to begin...</div></div><script>let ws=null,audioContext=null;async function startTranscription(){try{const protocol=window.location.protocol==="https:"?"wss:":"ws:";const wsUrl=protocol+"//"+window.location.host+"/ws/live";ws=new WebSocket(wsUrl);ws.onopen=()=>{document.getElementById("status").textContent="Connected";document.getElementById("status").className="status connected";document.getElementById("transcription").innerHTML="Listening..."};ws.onmessage=event=>{const data=JSON.parse(event.data);if(data.type==="word"){document.getElementById("transcription").innerHTML+=data.text+" "}};const stream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:24000,channelCount:1}});audioContext=new AudioContext({sampleRate:24000});const source=audioContext.createMediaStreamSource(stream);const processor=audioContext.createScriptProcessor(1920,1,1);processor.onaudioprocess=event=>{if(ws&&ws.readyState===WebSocket.OPEN){const inputBuffer=event.inputBuffer.getChannelData(0);ws.send(new Float32Array(inputBuffer).buffer)}};source.connect(processor);processor.connect(audioContext.destination);document.getElementById("startBtn").disabled=true;document.getElementById("stopBtn").disabled=false}catch(error){alert("Error: "+error.message)}}function stopTranscription(){if(ws){ws.close();ws=null}if(audioContext){audioContext.close();audioContext=null}document.getElementById("status").textContent="Disconnected";document.getElementById("status").className="status disconnected";document.getElementById("startBtn").disabled=false;document.getElementById("stopBtn").disabled=true}</script></body></html>"""
+    return html_content
 
 if __name__ == "__main__":
     uvicorn.run("live_api_server:app", host="0.0.0.0", port=8000, log_level="info")
-PYTHON_EOF
+EOF
 
-# Create docker-entrypoint.sh inline
-RUN cat > docker-entrypoint.sh << 'BASH_EOF'
+# Create docker-entrypoint.sh
+log_info "Creating Docker entrypoint..."
+cat > docker-entrypoint.sh << 'EOF'
 #!/bin/bash
 set -e
 echo "🚀 Kyutai STT Starting..."
@@ -337,51 +386,9 @@ done
 
 echo "🌐 Starting API server..."
 exec python3 live_api_server.py
-BASH_EOF
-
-RUN chmod +x docker-entrypoint.sh
-
-# Install moshi-server
-RUN /opt/rust/bin/cargo install --features cuda moshi-server
-
-# Update batch size
-ARG BATCH_SIZE=80
-RUN sed -i "s/batch_size = 64/batch_size = \${BATCH_SIZE}/" configs/config-stt-en_fr-hf.toml
-
-# Create directories
-RUN mkdir -p /app/logs
-
-EXPOSE 8000
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \\
-    CMD curl -f http://localhost:8000/health || exit 1
-
-ENTRYPOINT ["./docker-entrypoint.sh"]
 EOF
 
-# Download configs from official Kyutai repository
-log_info "Downloading configuration files..."
-if git clone --depth 1 https://github.com/kyutai-labs/delayed-streams-modeling.git temp_kyutai; then
-    cp -r temp_kyutai/configs ./
-    rm -rf temp_kyutai
-    log_success "Configuration files downloaded"
-else
-    log_error "Failed to download configuration files"
-    exit 1
-fi
-
-# Check available disk space
-AVAILABLE_SPACE=$(df . | awk 'NR==2 {print $4}')
-REQUIRED_SPACE=15000000  # 15GB in KB
-if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-    log_error "Insufficient disk space. Required: 15GB, Available: $((AVAILABLE_SPACE/1000000))GB"
-    log_error "Docker build requires significant space for Rust compilation and model cache"
-    exit 1
-fi
-log_success "Disk space check passed: $((AVAILABLE_SPACE/1000000))GB available"
-
-# Note: live_api_server.py and docker-entrypoint.sh are created above in the Dockerfile
-# They will be generated during the Docker build process
+chmod +x docker-entrypoint.sh
 
 # Update configuration
 sed -i "s/batch_size = 64/batch_size = ${BATCH_SIZE}/" configs/config-stt-en_fr-hf.toml
