@@ -38,26 +38,27 @@ log_info "Starting simple deployment for testing..."
 if [ -f "/opt/kyutai-stt/.deployment_state" ]; then
     log_info "🔄 Detected previous deployment state - resuming..."
     cd /opt/kyutai-stt
+    source .deployment_state
     
-    # Check if services are already running
-    if docker-compose ps | grep -q "Up"; then
-        log_success "Services are already running! Skipping to completion..."
-        PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-        source .deployment_state
-        
-        echo "╔══════════════════════════════════════════════════════════════╗"
-        echo "║                 DEPLOYMENT ALREADY COMPLETE                 ║"
-        echo "╚══════════════════════════════════════════════════════════════╝"
-        echo "🌐 WebSocket: ws://${PUBLIC_IP}:${API_PORT}/ws/live"
-        echo "🌐 Demo: http://${PUBLIC_IP}:${API_PORT}/demo"
-        echo "🔑 API Key: ${API_KEY}"
-        echo "📊 Batch Size: ${BATCH_SIZE}"
-        exit 0
+    # Check if services are already running (only if Docker is available)
+    if command -v docker &> /dev/null && docker info &> /dev/null; then
+        if docker-compose ps 2>/dev/null | grep -q "Up"; then
+            log_success "Services are already running! Skipping to completion..."
+            PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+            
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║                 DEPLOYMENT ALREADY COMPLETE                 ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo "🌐 WebSocket: ws://${PUBLIC_IP}:${API_PORT}/ws/live"
+            echo "🌐 Demo: http://${PUBLIC_IP}:${API_PORT}/demo"
+            echo "🔑 API Key: ${API_KEY}"
+            echo "📊 Batch Size: ${BATCH_SIZE}"
+            exit 0
+        fi
     fi
     
     # Resume from where we left off
     log_info "Resuming deployment..."
-    source .deployment_state
 else
     # Create deployment state file
     mkdir -p /opt/kyutai-stt
@@ -141,8 +142,9 @@ distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
 # Remove existing GPG key if present to avoid prompts
 rm -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
 
-# Install GPG key non-interactively
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+# Install GPG key non-interactively (force overwrite)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor > /tmp/nvidia-container-toolkit-keyring.gpg
+mv /tmp/nvidia-container-toolkit-keyring.gpg /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
 # Remove existing repository list to avoid conflicts
 rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list 2>/dev/null || true
