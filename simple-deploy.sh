@@ -159,23 +159,64 @@ nvidia-ctk runtime configure --runtime=docker
 
 # Ensure Docker service is running properly
 log_info "Ensuring Docker service is running..."
-systemctl stop docker || true
-systemctl start docker
-sleep 5
 
-# Wait for Docker to be fully ready
-for i in {1..30}; do
-    if docker info &> /dev/null; then
-        log_success "Docker is running and ready"
-        break
+# Stop any existing Docker processes
+systemctl stop docker || true
+systemctl stop docker.socket || true
+sleep 3
+
+# Check for common Docker startup issues and fix them
+log_info "Checking for Docker startup issues..."
+
+# Remove docker daemon pid file if exists
+rm -f /var/run/docker.pid 2>/dev/null || true
+
+# Clean up any docker network conflicts
+docker system prune -f 2>/dev/null || true
+
+# Try to start Docker with better error handling
+for attempt in {1..3}; do
+    log_info "Starting Docker (attempt $attempt/3)..."
+    
+    if systemctl start docker; then
+        log_info "Docker service started, waiting for readiness..."
+        
+        # Wait for Docker to be fully ready
+        for i in {1..30}; do
+            if docker info &> /dev/null; then
+                log_success "Docker is running and ready"
+                break 2  # Break out of both loops
+            fi
+            sleep 2
+        done
+        
+        # If we get here, Docker started but isn't responding
+        log_warning "Docker started but not responding, trying again..."
+        systemctl stop docker || true
+        sleep 5
+    else
+        log_warning "Docker failed to start on attempt $attempt"
+        
+        if [ $attempt -eq 3 ]; then
+            log_error "Docker failed to start after 3 attempts"
+            log_info "Docker service status:"
+            systemctl status docker || true
+            log_info "Docker service logs:"
+            journalctl -xeu docker.service --no-pager | tail -30
+            log_info "Kernel version and OS info:"
+            uname -a
+            cat /etc/os-release
+            
+            # Try one last desperate attempt with a reboot
+            log_warning "Attempting system reboot to fix Docker issues..."
+            log_info "Re-run the script after reboot:"
+            log_info "curl -sSL https://raw.githubusercontent.com/spanDevOps/kyutai/main/simple-deploy.sh | sudo bash"
+            reboot
+            exit 1
+        fi
+        
+        sleep 10
     fi
-    if [ $i -eq 30 ]; then
-        log_error "Docker failed to start properly"
-        systemctl status docker
-        journalctl -xeu docker.service | tail -20
-        exit 1
-    fi
-    sleep 2
 done
 
 # Test NVIDIA Docker integration
