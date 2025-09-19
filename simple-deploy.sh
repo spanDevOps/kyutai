@@ -73,10 +73,19 @@ else
     exit 1
 fi
 
+# Handle containerd conflicts first  
+log_info "Resolving package conflicts..."
+export DEBIAN_FRONTEND=noninteractive
+apt-get remove -y containerd containerd.io 2>/dev/null || true
+apt-get autoremove -y 2>/dev/null || true
+
 # Install dependencies
 log_info "Installing system dependencies..."
-export DEBIAN_FRONTEND=noninteractive
-apt upgrade -y -qq
+if [ "${SKIP_UPGRADE:-}" != "1" ]; then
+    apt upgrade -y -qq
+else
+    log_info "Skipping system upgrade (SKIP_UPGRADE=1)"
+fi
 apt install -y -qq wget git docker.io
 
 # Install Docker Compose v2
