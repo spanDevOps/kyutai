@@ -124,6 +124,13 @@ else
 fi
 apt install -y -qq wget git docker.io
 
+# Clean up any existing services first
+log_info "Cleaning up existing services..."
+docker-compose -f /opt/kyutai-stt/docker-compose.yml down 2>/dev/null || true
+pkill -f moshi-server 2>/dev/null || true
+pkill -f live_api_server 2>/dev/null || true
+sleep 3
+
 # Install Docker Compose v2
 if ! command -v docker-compose &> /dev/null; then
     log_info "Installing Docker Compose v2..."
@@ -462,7 +469,7 @@ class LiveTranscriptionService:
         self.active_connections += 1
         try:
             headers = {"kyutai-api-key": API_KEY}
-            async with websockets.connect(MOSHI_SERVER_URL, additional_headers=headers) as moshi_ws:
+            async with websockets.connect(MOSHI_SERVER_URL, extra_headers=headers) as moshi_ws:
                 logger.info(f"Live session started. Active: {self.active_connections}")
                 client_to_moshi = asyncio.create_task(self._forward_audio_to_moshi(client_websocket, moshi_ws))
                 moshi_to_client = asyncio.create_task(self._forward_transcription_to_client(moshi_ws, client_websocket))
@@ -518,7 +525,7 @@ async def root():
 async def health_check():
     try:
         headers = {"kyutai-api-key": API_KEY}
-        async with websockets.connect(MOSHI_SERVER_URL, additional_headers=headers) as websocket:
+        async with websockets.connect(MOSHI_SERVER_URL, extra_headers=headers) as websocket:
             await websocket.close()
         return {"status": "healthy", "active_connections": live_service.active_connections}
     except Exception as e:
@@ -543,7 +550,7 @@ async def websocket_live_transcription(websocket: WebSocket):
 @app.get("/demo", response_class=HTMLResponse)
 async def demo_page():
     # Fixed JavaScript template literals for bash
-    html_content = """<!DOCTYPE html><html><head><title>Kyutai STT Demo</title><style>body{font-family:Arial,sans-serif;margin:40px}.container{max-width:800px;margin:0 auto}.status{padding:10px;margin:10px 0;border-radius:5px}.connected{background-color:#d4edda;color:#155724}.disconnected{background-color:#f8d7da;color:#721c24}.transcription{background-color:#f8f9fa;padding:20px;margin:20px 0;border-radius:5px;min-height:100px}button{padding:10px 20px;margin:10px;font-size:16px}.start{background-color:#28a745;color:white;border:none;border-radius:5px}.stop{background-color:#dc3545;color:white;border:none;border-radius:5px}</style></head><body><div class="container"><h1>🎤 Kyutai STT Live Demo</h1><div id="status" class="status disconnected">Disconnected</div><button id="startBtn" class="start" onclick="startTranscription()">Start</button><button id="stopBtn" class="stop" onclick="stopTranscription()" disabled>Stop</button><h3>Live Transcription:</h3><div id="transcription" class="transcription">Click Start to begin...</div></div><script>let ws=null,audioContext=null;async function startTranscription(){try{const protocol=window.location.protocol==="https:"?"wss:":"ws:";const wsUrl=protocol+"//"+window.location.host+"/ws/live";ws=new WebSocket(wsUrl);ws.onopen=()=>{document.getElementById("status").textContent="Connected";document.getElementById("status").className="status connected";document.getElementById("transcription").innerHTML="Listening..."};ws.onmessage=event=>{const data=JSON.parse(event.data);if(data.type==="word"){document.getElementById("transcription").innerHTML+=data.text+" "}};const stream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:24000,channelCount:1}});audioContext=new AudioContext({sampleRate:24000});const source=audioContext.createMediaStreamSource(stream);const processor=audioContext.createScriptProcessor(1920,1,1);processor.onaudioprocess=event=>{if(ws&&ws.readyState===WebSocket.OPEN){const inputBuffer=event.inputBuffer.getChannelData(0);ws.send(new Float32Array(inputBuffer).buffer)}};source.connect(processor);processor.connect(audioContext.destination);document.getElementById("startBtn").disabled=true;document.getElementById("stopBtn").disabled=false}catch(error){alert("Error: "+error.message)}}function stopTranscription(){if(ws){ws.close();ws=null}if(audioContext){audioContext.close();audioContext=null}document.getElementById("status").textContent="Disconnected";document.getElementById("status").className="status disconnected";document.getElementById("startBtn").disabled=false;document.getElementById("stopBtn").disabled=true}</script></body></html>"""
+    html_content = """<!DOCTYPE html><html><head><title>Kyutai STT Demo</title><style>body{font-family:Arial,sans-serif;margin:40px}.container{max-width:800px;margin:0 auto}.status{padding:10px;margin:10px 0;border-radius:5px}.connected{background-color:#d4edda;color:#155724}.disconnected{background-color:#f8d7da;color:#721c24}.transcription{background-color:#f8f9fa;padding:20px;margin:20px 0;border-radius:5px;min-height:100px}button{padding:10px 20px;margin:10px;font-size:16px}.start{background-color:#28a745;color:white;border:none;border-radius:5px}.stop{background-color:#dc3545;color:white;border:none;border-radius:5px}</style></head><body><div class="container"><h1>🎤 Kyutai STT Live Demo</h1><div id="status" class="status disconnected">Disconnected</div><button id="startBtn" class="start" onclick="startTranscription()">Start</button><button id="stopBtn" class="stop" onclick="stopTranscription()" disabled>Stop</button><h3>Live Transcription:</h3><div id="transcription" class="transcription">Click Start to begin...</div></div><script>let ws=null,audioContext=null;async function startTranscription(){try{const protocol=window.location.protocol==="https:"?"wss:":"ws:";const wsUrl=protocol+"//"+window.location.host+"/ws/live";ws=new WebSocket(wsUrl);ws.onopen=()=>{document.getElementById("status").textContent="Connected";document.getElementById("status").className="status connected";document.getElementById("transcription").innerHTML="Listening..."};ws.onmessage=event=>{const data=JSON.parse(event.data);if(data.type==="word"){document.getElementById("transcription").innerHTML+=data.text+" "}};const stream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:24000,channelCount:1}});audioContext=new AudioContext({sampleRate:24000});const source=audioContext.createMediaStreamSource(stream);const processor=audioContext.createScriptProcessor(2048,1,1);processor.onaudioprocess=event=>{if(ws&&ws.readyState===WebSocket.OPEN){const inputBuffer=event.inputBuffer.getChannelData(0);const chunk=new Float32Array(1920);for(let i=0;i<1920&&i<inputBuffer.length;i++){chunk[i]=inputBuffer[i]}ws.send(chunk.buffer)}};source.connect(processor);processor.connect(audioContext.destination);document.getElementById("startBtn").disabled=true;document.getElementById("stopBtn").disabled=false}catch(error){alert("Error: "+error.message)}}function stopTranscription(){if(ws){ws.close();ws=null}if(audioContext){audioContext.close();audioContext=null}document.getElementById("status").textContent="Disconnected";document.getElementById("status").className="status disconnected";document.getElementById("startBtn").disabled=false;document.getElementById("stopBtn").disabled=true}</script></body></html>"""
     return html_content
 
 if __name__ == "__main__":
