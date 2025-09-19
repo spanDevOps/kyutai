@@ -79,7 +79,18 @@ fi
 
 # Install Python dependencies
 log_info "Installing Python dependencies..."
-pip3 install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
+# Check for available Python package managers
+if command -v pip3 &> /dev/null; then
+    pip3 install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
+elif command -v pip &> /dev/null; then
+    pip install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
+elif command -v python3 -m pip &> /dev/null; then
+    python3 -m pip install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
+else
+    log_error "No pip found. Installing pip first..."
+    apt install -y python3-pip
+    pip3 install --no-cache-dir fastapi uvicorn[standard] websockets msgpack soundfile numpy
+fi
 
 # Setup project directory
 PROJECT_DIR="/workspace/$PROJECT_NAME"
