@@ -24,15 +24,15 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # Banner
 cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
-║                 KYUTAI STT MINIMAL DEPLOYER                 ║
-║                   Just moshi-server + SSH                   ║
-║                          v1.1                               ║
-║                                                              ║
-║  🎤 Use stt_from_mic_rust_server.py from your local machine ║
+║                 KYUTAI STT MINIMAL DEPLOYER                   ║
+║                   Just moshi-server + SSH                     ║
+║                          v1.2                                 ║
+║                                                               ║
+║  🎤 Use stt_from_mic_rust_server.py from your local machine  ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT MINIMAL DEPLOYER v1.1"
+log_success "🚀 KYUTAI STT MINIMAL DEPLOYER v1.2"
 log_info "✅ Latest version with CUDA fixes and simplified deployment"
 log_info "Starting minimal deployment..."
 
@@ -64,7 +64,7 @@ fi
 log_info "Installing system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -qq
-apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake openssh-server
+apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake openssh-server net-tools socat
 
 # Set up CUDA environment
 log_info "Setting up CUDA environment..."
@@ -120,7 +120,9 @@ log_info "Cleaning up existing services..."
 pkill -f moshi-server 2>/dev/null || true
 sleep 3
 
-# Python dependencies not needed - script runs on user's local machine
+# Install Python dependencies for WebSocket testing and port forwarding
+log_info "Installing Python dependencies..."
+pip3 install --no-cache-dir websockets msgpack numpy
 
 # Setup project directory
 PROJECT_DIR="/workspace/$PROJECT_NAME"
@@ -202,8 +204,34 @@ echo "Batch Size: BATCH_SIZE_PLACEHOLDER"
 cd PROJECT_DIR_PLACEHOLDER
 
 echo "🎯 Starting moshi-server..."
+# Start moshi-server and capture its PID
 $HOME/.cargo/bin/moshi-server worker --config configs/config-stt-en_fr-hf.toml &
 MOSHI_PID=$!
+
+# Wait for moshi-server to start
+sleep 5
+
+# Check if moshi-server is listening on localhost:8080
+if netstat -tlnp 2>/dev/null | grep -q "127.0.0.1:8080"; then
+    echo "⚠️  moshi-server is only listening on localhost - setting up port forwarding..."
+    
+    # Kill any existing socat processes
+    pkill -f "socat.*8080" 2>/dev/null || true
+    
+    # Set up port forwarding from 0.0.0.0:8080 to localhost:8080
+    apt install -y socat 2>/dev/null || echo "socat already available"
+    socat TCP-LISTEN:8080,bind=0.0.0.0,fork TCP:localhost:8080 &
+    SOCAT_PID=$!
+    
+    echo "✅ Port forwarding enabled: 0.0.0.0:8080 -> localhost:8080"
+elif netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:8080"; then
+    echo "✅ moshi-server is listening on all interfaces"
+else
+    echo "⚠️  Port 8080 status unclear - installing socat for safety"
+    apt install -y socat 2>/dev/null || true
+    socat TCP-LISTEN:8080,bind=0.0.0.0,fork TCP:localhost:8080 &
+    SOCAT_PID=$!
+fi
 
 echo "⏳ Waiting for moshi-server to be ready..."
 for i in {1..120}; do
@@ -218,13 +246,15 @@ for i in {1..120}; do
     sleep 2
 done
 
-# Get container IP
+# Get public IP for external access
+PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || hostname -I | awk '{print $1}')
 CONTAINER_IP=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "localhost")
 
 echo ""
 echo "🎉 MOSHI-SERVER READY!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🌐 moshi-server endpoint: ws://${CONTAINER_IP}:8080/api/asr-streaming"
+echo "🌐 moshi-server endpoint (internal): ws://${CONTAINER_IP}:8080/api/asr-streaming"
+echo "🌐 moshi-server endpoint (external): ws://${PUBLIC_IP}:8080/api/asr-streaming"
 echo "🔑 API Key: API_KEY_PLACEHOLDER"
 echo "📊 Batch Size: BATCH_SIZE_PLACEHOLDER"
 echo "📊 GPU Memory: GPU_MEMORY_PLACEHOLDERMb"
@@ -232,7 +262,35 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo "✅ Ready for live transcription!"
 echo ""
-echo "🖥️  FROM YOUR LOCAL MACHINE:"
+
+# Test connection from within container
+echo "🧪 Testing WebSocket connection..."
+python3 -c "
+import asyncio
+import websockets
+import sys
+
+async def test_connection():
+    try:
+        uri = 'ws://localhost:8080/api/asr-streaming'
+        headers = {'kyutai-api-key': 'API_KEY_PLACEHOLDER'}
+        async with websockets.connect(uri, additional_headers=headers) as ws:
+            print('✅ Internal WebSocket connection successful!')
+            await ws.close()
+            return True
+    except Exception as e:
+        print(f'❌ Internal WebSocket connection failed: {e}')
+        return False
+
+result = asyncio.run(test_connection())
+sys.exit(0 if result else 1)
+" || echo "⚠️  WebSocket test failed - but external access may still work"
+
+echo ""
+echo "🖥️  FROM YOUR LOCAL MACHINE (RECOMMENDED):"
+echo "   python kyutai-client.py --url ws://${PUBLIC_IP}:8080 --api-key API_KEY_PLACEHOLDER"
+echo ""
+echo "🖥️  OR MANUAL SETUP:"
 echo "1. Download the script:"
 echo "   curl -O https://raw.githubusercontent.com/kyutai-labs/delayed-streams-modeling/main/scripts/stt_from_mic_rust_server.py"
 echo ""
@@ -240,15 +298,21 @@ echo "2. Install dependencies:"
 echo "   pip install msgpack numpy sounddevice websockets"
 echo ""
 echo "3. Run live transcription:"
-echo "   python stt_from_mic_rust_server.py --url ws://${CONTAINER_IP}:8080 --api-key API_KEY_PLACEHOLDER"
+echo "   python stt_from_mic_rust_server.py --url ws://${PUBLIC_IP}:8080 --api-key API_KEY_PLACEHOLDER"
 echo ""
 echo "🛠️  Management:"
 echo "   • View logs: tail -f /workspace/kyutai-stt/logs/*.log"
 echo "   • Stop: pkill -f moshi-server"
 echo "   • Restart: ./start_moshi.sh"
 
-# Keep moshi-server running
-wait $MOSHI_PID
+# Keep both moshi-server and socat running
+if [ -n "$SOCAT_PID" ]; then
+    echo "🔄 Monitoring both moshi-server (PID: $MOSHI_PID) and port forwarder (PID: $SOCAT_PID)..."
+    wait $MOSHI_PID $SOCAT_PID
+else
+    echo "🔄 Monitoring moshi-server (PID: $MOSHI_PID)..."
+    wait $MOSHI_PID
+fi
 BASH_EOF
 
 # Update startup script with actual values
