@@ -264,19 +264,88 @@ volumes:
     driver: local
 EOF
 
-# Determine best CUDA image
-log_info "Determining compatible CUDA image..."
+# Determine best CUDA image based on system CUDA version
+log_info "Detecting system CUDA version..."
+
+# Get system CUDA version
+SYSTEM_CUDA_VERSION=""
+if command -v nvcc &> /dev/null; then
+    SYSTEM_CUDA_VERSION=$(nvcc --version | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/')
+    log_success "System CUDA version detected: $SYSTEM_CUDA_VERSION"
+elif [ -f /usr/local/cuda/version.txt ]; then
+    SYSTEM_CUDA_VERSION=$(cat /usr/local/cuda/version.txt | grep "CUDA Version" | sed 's/.*CUDA Version \([0-9]\+\.[0-9]\+\).*/\1/')
+    log_success "System CUDA version detected from file: $SYSTEM_CUDA_VERSION"
+else
+    log_warning "No system CUDA installation detected, using default"
+fi
+
+# Match Docker image to system CUDA version
+log_info "Selecting compatible CUDA Docker image..."
 CUDA_IMAGE=""
-for image in "nvidia/cuda:12.4-devel-ubuntu22.04" "nvidia/cuda:12.1-devel-ubuntu22.04" "nvidia/cuda:11.8-devel-ubuntu22.04"; do
-    if docker pull $image &> /dev/null; then
+
+if [ -n "$SYSTEM_CUDA_VERSION" ]; then
+    # Try to match system CUDA version first
+    case "$SYSTEM_CUDA_VERSION" in
+        12.4*) PREFERRED_IMAGES=("nvidia/cuda:12.4-devel-ubuntu22.04" "nvidia/cuda:12.2-devel-ubuntu22.04" "nvidia/cuda:12.1-devel-ubuntu22.04") ;;
+        12.3*) PREFERRED_IMAGES=("nvidia/cuda:12.3-devel-ubuntu22.04" "nvidia/cuda:12.2-devel-ubuntu22.04" "nvidia/cuda:12.1-devel-ubuntu22.04") ;;
+        12.2*) PREFERRED_IMAGES=("nvidia/cuda:12.2-devel-ubuntu22.04" "nvidia/cuda:12.1-devel-ubuntu22.04" "nvidia/cuda:12.0-devel-ubuntu22.04") ;;
+        12.1*) PREFERRED_IMAGES=("nvidia/cuda:12.1-devel-ubuntu22.04" "nvidia/cuda:12.0-devel-ubuntu22.04" "nvidia/cuda:11.8-devel-ubuntu22.04") ;;
+        12.0*) PREFERRED_IMAGES=("nvidia/cuda:12.0-devel-ubuntu22.04" "nvidia/cuda:11.8-devel-ubuntu22.04" "nvidia/cuda:11.7-devel-ubuntu22.04") ;;
+        11.8*) PREFERRED_IMAGES=("nvidia/cuda:11.8-devel-ubuntu22.04" "nvidia/cuda:11.7-devel-ubuntu22.04" "nvidia/cuda:11.6-devel-ubuntu22.04") ;;
+        11.7*) PREFERRED_IMAGES=("nvidia/cuda:11.7-devel-ubuntu22.04" "nvidia/cuda:11.6-devel-ubuntu22.04" "nvidia/cuda:11.8-devel-ubuntu22.04") ;;
+        *) PREFERRED_IMAGES=("nvidia/cuda:12.4-devel-ubuntu22.04" "nvidia/cuda:12.1-devel-ubuntu22.04" "nvidia/cuda:11.8-devel-ubuntu22.04") ;;
+    esac
+    log_info "Using CUDA $SYSTEM_CUDA_VERSION compatible images"
+else
+    # Fallback to most common versions for Vast.ai/Ubuntu 22.04
+    PREFERRED_IMAGES=("nvidia/cuda:12.4-devel-ubuntu22.04" "nvidia/cuda:12.1-devel-ubuntu22.04" "nvidia/cuda:11.8-devel-ubuntu22.04" "nvidia/cuda:12.0-devel-ubuntu22.04")
+    log_info "Using default CUDA images for Ubuntu 22.04"
+fi
+
+# Try to pull preferred images
+for image in "${PREFERRED_IMAGES[@]}"; do
+    log_info "Trying CUDA image: $image"
+    if docker pull $image; then
         CUDA_IMAGE=$image
-        log_success "Using CUDA image: $CUDA_IMAGE"
+        log_success "Successfully pulled CUDA image: $CUDA_IMAGE"
         break
+    else
+        log_warning "Failed to pull $image, trying next..."
     fi
 done
 
+# Final fallback if nothing worked
 if [ -z "$CUDA_IMAGE" ]; then
-    log_error "No compatible CUDA image found"
+    log_warning "Preferred images failed, trying broader fallback..."
+    FALLBACK_IMAGES=("nvidia/cuda:12.2-devel-ubuntu22.04" "nvidia/cuda:11.7-devel-ubuntu22.04" "nvidia/cuda:11.6-devel-ubuntu22.04")
+    
+    for image in "${FALLBACK_IMAGES[@]}"; do
+        log_info "Trying fallback image: $image"
+        if docker pull $image; then
+            CUDA_IMAGE=$image
+            log_success "Successfully pulled fallback CUDA image: $CUDA_IMAGE"
+            break
+        fi
+    done
+fi
+
+if [ -z "$CUDA_IMAGE" ]; then
+    log_error "Failed to pull any CUDA images. Checking Docker Hub connectivity..."
+    
+    # Test basic Docker Hub connectivity
+    if docker pull hello-world &> /dev/null; then
+        log_error "Docker Hub accessible but no NVIDIA CUDA images available"
+        log_info "This might be a temporary Docker Hub issue or network restriction"
+        log_info "System CUDA version: ${SYSTEM_CUDA_VERSION:-'Not detected'}"
+        log_info "Available workarounds:"
+        log_info "1. Wait and retry: curl -sSL https://raw.githubusercontent.com/spanDevOps/kyutai/main/simple-deploy.sh | sudo bash"
+        log_info "2. Use different mirror or VPN"
+        log_info "3. Check Vast.ai network restrictions"
+    else
+        log_error "Cannot access Docker Hub - network connectivity issue"
+        log_info "Check your internet connection and firewall settings"
+    fi
+    
     exit 1
 fi
 
