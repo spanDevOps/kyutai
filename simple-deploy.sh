@@ -113,10 +113,13 @@ apt-get autoremove -y 2>/dev/null || true
 
 # Install dependencies
 log_info "Installing system dependencies..."
-if [ "${SKIP_UPGRADE:-}" != "1" ]; then
+
+# Auto-detect if we should skip upgrade (default: yes, for faster deployment)
+if [ "${FORCE_UPGRADE:-}" = "1" ]; then
+    log_info "Force upgrade requested (FORCE_UPGRADE=1)"
     apt upgrade -y -qq
 else
-    log_info "Skipping system upgrade (SKIP_UPGRADE=1)"
+    log_info "Skipping system upgrade for faster deployment (set FORCE_UPGRADE=1 to override)"
 fi
 apt install -y -qq wget git docker.io
 
