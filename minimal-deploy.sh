@@ -9,6 +9,58 @@ PROJECT_NAME="kyutai-stt"
 BATCH_SIZE=${BATCH_SIZE:-80}
 API_KEY=${API_KEY:-$(openssl rand -hex 16 2>/dev/null || echo "public_token")}
 
+# Auto-detect exposed port from Vast.ai environment
+log_info "Auto-detecting exposed port..."
+
+# Method 1: Check environment variables
+if [ -n "$VAST_CONTAINERD_PORT" ]; then
+    MOSHI_PORT=$VAST_CONTAINERD_PORT
+    log_success "Found Vast.ai port via VAST_CONTAINERD_PORT: $MOSHI_PORT"
+# Method 2: Check ports.log file
+elif [ -f "/root/ports.log" ]; then
+    MOSHI_PORT=$(grep -o '[0-9]\+' /root/ports.log | head -1)
+    log_success "Found exposed port in ports.log: $MOSHI_PORT"
+# Method 3: Check SSH connection info from environment
+elif [ -n "$SSH_CLIENT" ]; then
+    # SSH_CLIENT contains "client_ip client_port server_port"
+    SERVER_SSH_PORT=$(echo $SSH_CLIENT | awk '{print $3}')
+    if [ -n "$SERVER_SSH_PORT" ] && [ "$SERVER_SSH_PORT" != "22" ]; then
+        # Vast.ai typically allocates consecutive ports
+        MOSHI_PORT=$((SERVER_SSH_PORT + 1))
+        log_success "Detected SSH port $SERVER_SSH_PORT, using next port: $MOSHI_PORT"
+    else
+        MOSHI_PORT=22093
+        log_warning "Using common Vast.ai port: $MOSHI_PORT"
+    fi
+# Method 4: Check for high-numbered listening ports (typical Vast.ai range)
+elif netstat -tlnp 2>/dev/null | grep -E ":2[0-9]{4}" | head -1; then
+    HIGH_PORT=$(netstat -tlnp 2>/dev/null | grep -E ":2[0-9]{4}" | head -1 | awk '{print $4}' | cut -d: -f2)
+    if [ -n "$HIGH_PORT" ]; then
+        MOSHI_PORT=$((HIGH_PORT + 1))
+        log_success "Found high port $HIGH_PORT, using next port: $MOSHI_PORT"
+    else
+        MOSHI_PORT=22093
+        log_warning "Using default Vast.ai port: $MOSHI_PORT"
+    fi
+else
+    MOSHI_PORT=22093
+    log_warning "Could not auto-detect port, using common Vast.ai port: $MOSHI_PORT"
+fi
+
+log_info "Will use port $MOSHI_PORT for external access"
+
+# Allow manual override
+if [ -n "$1" ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+    MOSHI_PORT=$1
+    log_info "Manual port override: Using port $MOSHI_PORT"
+fi
+
+# Validate port is in reasonable range
+if [ "$MOSHI_PORT" -lt 1024 ] || [ "$MOSHI_PORT" -gt 65535 ]; then
+    log_warning "Port $MOSHI_PORT seems invalid, using fallback 22093"
+    MOSHI_PORT=22093
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -26,13 +78,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                 KYUTAI STT MINIMAL DEPLOYER                   ║
 ║                   Just moshi-server + SSH                     ║
-║                          v1.2                                 ║
+║                          v1.3                                 ║
 ║                                                               ║
 ║  🎤 Use stt_from_mic_rust_server.py from your local machine  ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT MINIMAL DEPLOYER v1.2"
+log_success "🚀 KYUTAI STT MINIMAL DEPLOYER v1.3"
 log_info "✅ Latest version with CUDA fixes and simplified deployment"
 log_info "Starting minimal deployment..."
 
@@ -203,35 +255,23 @@ echo "Batch Size: BATCH_SIZE_PLACEHOLDER"
 
 cd PROJECT_DIR_PLACEHOLDER
 
-echo "🎯 Starting moshi-server..."
-# Start moshi-server and capture its PID
+echo "🎯 Starting moshi-server on port MOSHI_PORT_PLACEHOLDER..."
+# Start moshi-server on default port 8080, then forward to exposed port
 $HOME/.cargo/bin/moshi-server worker --config configs/config-stt-en_fr-hf.toml &
 MOSHI_PID=$!
 
 # Wait for moshi-server to start
 sleep 5
 
-# Check if moshi-server is listening on localhost:8080
-if netstat -tlnp 2>/dev/null | grep -q "127.0.0.1:8080"; then
-    echo "⚠️  moshi-server is only listening on localhost - setting up port forwarding..."
-    
-    # Kill any existing socat processes
-    pkill -f "socat.*8080" 2>/dev/null || true
-    
-    # Set up port forwarding from 0.0.0.0:8080 to localhost:8080
-    apt install -y socat 2>/dev/null || echo "socat already available"
-    socat TCP-LISTEN:8080,bind=0.0.0.0,fork TCP:localhost:8080 &
-    SOCAT_PID=$!
-    
-    echo "✅ Port forwarding enabled: 0.0.0.0:8080 -> localhost:8080"
-elif netstat -tlnp 2>/dev/null | grep -q "0.0.0.0:8080"; then
-    echo "✅ moshi-server is listening on all interfaces"
-else
-    echo "⚠️  Port 8080 status unclear - installing socat for safety"
-    apt install -y socat 2>/dev/null || true
-    socat TCP-LISTEN:8080,bind=0.0.0.0,fork TCP:localhost:8080 &
-    SOCAT_PID=$!
-fi
+echo "🔄 Setting up port forwarding from exposed port MOSHI_PORT_PLACEHOLDER to moshi-server port 8080..."
+# Kill any existing socat processes for our ports
+pkill -f "socat.*MOSHI_PORT_PLACEHOLDER" 2>/dev/null || true
+
+# Forward the exposed port to moshi-server's port
+socat TCP-LISTEN:MOSHI_PORT_PLACEHOLDER,bind=0.0.0.0,fork TCP:localhost:8080 &
+SOCAT_PID=$!
+
+echo "✅ Port forwarding enabled: 0.0.0.0:MOSHI_PORT_PLACEHOLDER -> localhost:8080"
 
 echo "⏳ Waiting for moshi-server to be ready..."
 for i in {1..120}; do
@@ -254,7 +294,7 @@ echo ""
 echo "🎉 MOSHI-SERVER READY!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🌐 moshi-server endpoint (internal): ws://${CONTAINER_IP}:8080/api/asr-streaming"
-echo "🌐 moshi-server endpoint (external): ws://${PUBLIC_IP}:8080/api/asr-streaming"
+echo "🌐 moshi-server endpoint (external): ws://${PUBLIC_IP}:MOSHI_PORT_PLACEHOLDER/api/asr-streaming"
 echo "🔑 API Key: API_KEY_PLACEHOLDER"
 echo "📊 Batch Size: BATCH_SIZE_PLACEHOLDER"
 echo "📊 GPU Memory: GPU_MEMORY_PLACEHOLDERMb"
@@ -272,7 +312,7 @@ import sys
 
 async def test_connection():
     try:
-        uri = 'ws://localhost:8080/api/asr-streaming'
+        uri = 'ws://localhost:MOSHI_PORT_PLACEHOLDER/api/asr-streaming'
         headers = {'kyutai-api-key': 'API_KEY_PLACEHOLDER'}
         async with websockets.connect(uri, additional_headers=headers) as ws:
             print('✅ Internal WebSocket connection successful!')
@@ -288,7 +328,7 @@ sys.exit(0 if result else 1)
 
 echo ""
 echo "🖥️  FROM YOUR LOCAL MACHINE (RECOMMENDED):"
-echo "   python kyutai-client.py --url ws://${PUBLIC_IP}:8080 --api-key API_KEY_PLACEHOLDER"
+echo "   python kyutai-client.py --url ws://${PUBLIC_IP}:MOSHI_PORT_PLACEHOLDER --api-key API_KEY_PLACEHOLDER"
 echo ""
 echo "🖥️  OR MANUAL SETUP:"
 echo "1. Download the script:"
@@ -298,7 +338,7 @@ echo "2. Install dependencies:"
 echo "   pip install msgpack numpy sounddevice websockets"
 echo ""
 echo "3. Run live transcription:"
-echo "   python stt_from_mic_rust_server.py --url ws://${PUBLIC_IP}:8080 --api-key API_KEY_PLACEHOLDER"
+echo "   python stt_from_mic_rust_server.py --url ws://${PUBLIC_IP}:MOSHI_PORT_PLACEHOLDER --api-key API_KEY_PLACEHOLDER"
 echo ""
 echo "🛠️  Management:"
 echo "   • View logs: tail -f /workspace/kyutai-stt/logs/*.log"
@@ -320,6 +360,7 @@ sed -i "s|PROJECT_DIR_PLACEHOLDER|${PROJECT_DIR}|g" start_moshi.sh
 sed -i "s/API_KEY_PLACEHOLDER/${API_KEY}/g" start_moshi.sh
 sed -i "s/BATCH_SIZE_PLACEHOLDER/${BATCH_SIZE}/g" start_moshi.sh
 sed -i "s/GPU_MEMORY_PLACEHOLDER/${GPU_MEMORY}/g" start_moshi.sh
+sed -i "s/MOSHI_PORT_PLACEHOLDER/${MOSHI_PORT}/g" start_moshi.sh
 
 chmod +x start_moshi.sh
 
