@@ -81,9 +81,7 @@ log_info "Cleaning up existing services..."
 pkill -f moshi-server 2>/dev/null || true
 sleep 3
 
-# Install Python dependencies for the script (optional - for container testing)
-log_info "Installing Python dependencies..."
-pip3 install --no-cache-dir msgpack numpy sounddevice websockets
+# Python dependencies not needed - script runs on user's local machine
 
 # Setup project directory
 PROJECT_DIR="/workspace/$PROJECT_NAME"
@@ -91,11 +89,10 @@ log_info "Setting up project directory: $PROJECT_DIR"
 mkdir -p "$PROJECT_DIR"
 cd "$PROJECT_DIR"
 
-# Download Kyutai configs and scripts
+# Download Kyutai configs only
 log_info "Downloading Kyutai configuration files..."
 if git clone --depth 1 https://github.com/kyutai-labs/delayed-streams-modeling.git temp_kyutai; then
     cp -r temp_kyutai/configs ./
-    cp -r temp_kyutai/scripts ./
     rm -rf temp_kyutai
     log_success "Configuration files downloaded"
 else
@@ -177,11 +174,15 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo "✅ Ready for live transcription!"
 echo ""
-echo "🖥️  FROM YOUR LOCAL MACHINE, run:"
-echo "python scripts/stt_from_mic_rust_server.py --url ws://${CONTAINER_IP}:8080 --api-key API_KEY_PLACEHOLDER"
+echo "🖥️  FROM YOUR LOCAL MACHINE:"
+echo "1. Download the script:"
+echo "   curl -O https://raw.githubusercontent.com/kyutai-labs/delayed-streams-modeling/main/scripts/stt_from_mic_rust_server.py"
 echo ""
-echo "🔧 Or test from within container:"
-echo "cd $PROJECT_DIR_PLACEHOLDER && python3 scripts/stt_from_mic_rust_server.py --api-key API_KEY_PLACEHOLDER"
+echo "2. Install dependencies:"
+echo "   pip install msgpack numpy sounddevice websockets"
+echo ""
+echo "3. Run live transcription:"
+echo "   python stt_from_mic_rust_server.py --url ws://${CONTAINER_IP}:8080 --api-key API_KEY_PLACEHOLDER"
 echo ""
 echo "🛠️  Management:"
 echo "   • View logs: tail -f /workspace/kyutai-stt/logs/*.log"
