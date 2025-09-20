@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v3.0                               ║
+║                          v4                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v3.0"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v4"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -163,7 +163,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Kyutai STT Production API", version="3.0.0")
+app = FastAPI(title="Kyutai STT Production API", version="4.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 MOSHI_SERVER_URL = "ws://localhost:8080/api/asr-streaming"
@@ -265,7 +265,7 @@ async def websocket_live_transcription(websocket: WebSocket):
         logger.error(f"WebSocket error: {str(e)}")
 
 if __name__ == "__main__":
-    uvicorn.run("production_api:app", host="0.0.0.0", port=INTERNAL_PORT)
+    uvicorn.run("production_api:app", host="0.0.0.0", port=8000)
 PYTHON_EOF
 
 # Create startup script
