@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v5                               ║
+║                          v6                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v5"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v6"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -62,7 +62,7 @@ fi
 log_info "Installing system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -qq
-apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake python3-pip
+apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake python3-pip net-tools
 
 # Set up CUDA environment
 log_info "Setting up CUDA environment..."
