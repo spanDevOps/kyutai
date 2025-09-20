@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v8                               ║
+║                          v9                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v8"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v9"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -318,8 +318,8 @@ echo "⏳ Waiting for API server to be ready..."
 sleep 10
 
 echo "🔗 Starting Cloudflare Tunnel for public access..."
-# Create a quick tunnel (no account needed for testing)
-cloudflared tunnel --url http://localhost:INTERNAL_PORT_PLACEHOLDER &
+# Create a quick tunnel (no account needed for testing) and capture output
+cloudflared tunnel --url http://localhost:INTERNAL_PORT_PLACEHOLDER > /tmp/cloudflared.log 2>&1 &
 TUNNEL_PID=$!
 
 echo "⏳ Waiting for tunnel to establish..."
@@ -331,32 +331,28 @@ ACTUAL_API_KEY=$(grep authorized_ids configs/config-stt-en_fr-hf.toml | grep -o 
 # Get tunnel URL from cloudflared logs (try multiple methods)
 TUNNEL_URL=""
 for i in {1..10}; do
-    # Method 1: Extract from running process
+    # Method 1: Extract from captured log file
+    if [ -f "/tmp/cloudflared.log" ]; then
+        TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' /tmp/cloudflared.log | head -1)
+        if [ -n "$TUNNEL_URL" ]; then
+            break
+        fi
+    fi
+    
+    # Method 2: Extract from running process
     TUNNEL_URL=$(ps aux | grep cloudflared | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
     if [ -n "$TUNNEL_URL" ]; then
         break
     fi
-    # Method 2: Extract from recent logs using journalctl
-    TUNNEL_URL=$(journalctl -u cloudflared --since "5 minutes ago" --no-pager | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
-    if [ -n "$TUNNEL_URL" ]; then
-        break
-    fi
-    # Method 3: Extract from all recent logs
-    TUNNEL_URL=$(dmesg | tail -100 | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
-    if [ -n "$TUNNEL_URL" ]; then
-        break
-    fi
+    
     sleep 2
 done
 
-# If still not found, try to extract from the output we just saw
+# If still not found, show manual instructions
 if [ -z "$TUNNEL_URL" ]; then
-    echo "🔍 Attempting manual extraction from recent output..."
-    # This should catch URLs like the one in your logs
-    TUNNEL_URL=$(echo "bringing-survive-finding-acoustic.trycloudflare.com" | head -1)
-    if [ -n "$TUNNEL_URL" ]; then
-        TUNNEL_URL="https://$TUNNEL_URL"
-    fi
+    echo "🔍 Could not auto-detect tunnel URL."
+    echo "   Please look for 'https://something.trycloudflare.com' in the logs above"
+    echo "   and use that URL manually."
 fi
 
 # Always show the results, even if tunnel URL detection fails
