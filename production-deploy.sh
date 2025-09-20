@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v4                               ║
+║                          v5                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v4"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v5"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -98,9 +98,9 @@ pkill -f uvicorn 2>/dev/null || true
 pkill -f cloudflared 2>/dev/null || true
 sleep 3
 
-# Install Python dependencies
+# Install Python dependencies (use older websockets for additional_headers compatibility)
 log_info "Installing Python dependencies..."
-pip3 install --no-cache-dir fastapi uvicorn[standard] websockets msgpack
+pip3 install --no-cache-dir fastapi uvicorn[standard] "websockets<11.0" msgpack
 
 # Setup project directory
 PROJECT_DIR="/workspace/$PROJECT_NAME"
@@ -163,7 +163,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Kyutai STT Production API", version="4.0")
+app = FastAPI(title="Kyutai STT Production API", version="5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 MOSHI_SERVER_URL = "ws://localhost:8080/api/asr-streaming"
@@ -328,6 +328,9 @@ sleep 15
 # Get tunnel URL from cloudflared logs
 TUNNEL_URL=$(ps aux | grep cloudflared | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
 
+# Get the actual API key from config
+ACTUAL_API_KEY=$(grep authorized_ids configs/config-stt-en_fr-hf.toml | grep -o '[a-f0-9]\{32\}')
+
 if [ -n "$TUNNEL_URL" ]; then
     echo ""
     echo "🎉 PRODUCTION DEPLOYMENT COMPLETED!"
@@ -337,18 +340,24 @@ if [ -n "$TUNNEL_URL" ]; then
     echo "   Health: $TUNNEL_URL/health"
     echo "   Status: $TUNNEL_URL/"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🔑 API Key: API_KEY_PLACEHOLDER"
+    echo "🔑 API Key: $ACTUAL_API_KEY"
     echo "📊 Batch Size: BATCH_SIZE_PLACEHOLDER"
     echo "📊 GPU Memory: GPU_MEMORY_PLACEHOLDERMb"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo "✅ Ready for production use!"
     echo ""
-    echo "🖥️  YOUR TEAM CAN USE:"
-    echo "   const ws = new WebSocket('${TUNNEL_URL/https:/wss:}/ws/live');"
+    echo "🖥️  READY-TO-USE COMMANDS:"
     echo ""
-    echo "🖥️  OR FROM PYTHON:"
-    echo "   python stt_from_mic_rust_server.py --url ${TUNNEL_URL/https:/ws:} --api-key API_KEY_PLACEHOLDER"
+    echo "📱 Test with kyutai-client:"
+    echo "   python kyutai-client.py --url ${TUNNEL_URL/https:/wss:} --api-key $ACTUAL_API_KEY"
+    echo ""
+    echo "🎤 Test with direct script:"
+    echo "   python stt_from_mic_rust_server.py --url ${TUNNEL_URL/https:/ws:} --api-key $ACTUAL_API_KEY"
+    echo ""
+    echo "💻 For your team (JavaScript):"
+    echo "   const ws = new WebSocket('${TUNNEL_URL/https:/wss:}/ws/live');"
+    echo "   // Add API key in headers: {'kyutai-api-key': '$ACTUAL_API_KEY'}"
     echo ""
     echo "🛠️  Management:"
     echo "   • Stop: pkill -f moshi-server && pkill -f uvicorn && pkill -f cloudflared"
