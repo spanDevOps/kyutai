@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v6                               ║
+║                          v7                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v6"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v7"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -98,9 +98,9 @@ pkill -f uvicorn 2>/dev/null || true
 pkill -f cloudflared 2>/dev/null || true
 sleep 3
 
-# Install Python dependencies (use older websockets for additional_headers compatibility)
+# Install Python dependencies (use latest websockets and adapt code accordingly)
 log_info "Installing Python dependencies..."
-pip3 install --no-cache-dir fastapi uvicorn[standard] "websockets<11.0" msgpack
+pip3 install --no-cache-dir fastapi uvicorn[standard] websockets msgpack
 
 # Setup project directory
 PROJECT_DIR="/workspace/$PROJECT_NAME"
@@ -179,7 +179,7 @@ class LiveTranscriptionService:
         self.active_connections += 1
         try:
             headers = {"kyutai-api-key": API_KEY}
-            async with websockets.connect(MOSHI_SERVER_URL, additional_headers=headers) as moshi_ws:
+            async with websockets.connect(MOSHI_SERVER_URL, extra_headers=headers) as moshi_ws:
                 logger.info(f"Live session started. Active: {self.active_connections}")
                 
                 # Send connection confirmation
@@ -247,7 +247,7 @@ async def root():
 async def health_check():
     try:
         headers = {"kyutai-api-key": API_KEY}
-        async with websockets.connect(MOSHI_SERVER_URL, additional_headers=headers) as websocket:
+        async with websockets.connect(MOSHI_SERVER_URL, extra_headers=headers) as websocket:
             await websocket.close()
         return {"status": "healthy", "active_connections": live_service.active_connections}
     except Exception as e:
@@ -325,13 +325,61 @@ TUNNEL_PID=$!
 echo "⏳ Waiting for tunnel to establish..."
 sleep 15
 
-# Get tunnel URL from cloudflared logs
-TUNNEL_URL=$(ps aux | grep cloudflared | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
-
 # Get the actual API key from config
 ACTUAL_API_KEY=$(grep authorized_ids configs/config-stt-en_fr-hf.toml | grep -o '[a-f0-9]\{32\}')
 
+# Get tunnel URL from cloudflared logs (try multiple methods)
+TUNNEL_URL=""
+for i in {1..10}; do
+    TUNNEL_URL=$(ps aux | grep cloudflared | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
+    if [ -n "$TUNNEL_URL" ]; then
+        break
+    fi
+    # Also try to extract from cloudflared output files
+    TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+    if [ -n "$TUNNEL_URL" ]; then
+        break
+    fi
+    sleep 2
+done
+
+# Always show the results, even if tunnel URL detection fails
+echo ""
+echo "🎉 PRODUCTION DEPLOYMENT COMPLETED!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔑 API Key: $ACTUAL_API_KEY"
+echo "📊 Batch Size: BATCH_SIZE_PLACEHOLDER"
+echo "📊 GPU Memory: GPU_MEMORY_PLACEHOLDERMb"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 if [ -n "$TUNNEL_URL" ]; then
+    echo "🌐 PUBLIC API ENDPOINT:"
+    echo "   WebSocket: ${TUNNEL_URL/https:/wss:}/ws/live"
+    echo "   Health: $TUNNEL_URL/health"
+    echo "   Status: $TUNNEL_URL/"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "✅ Ready for production use!"
+    echo ""
+    echo "🖥️  READY-TO-USE COMMANDS:"
+    echo ""
+    echo "📱 Test with version-agnostic client:"
+    echo "   python kyutai-stt-client.py --url ${TUNNEL_URL/https:/wss:} --api-key $ACTUAL_API_KEY"
+    echo ""
+    echo "🎤 Test with original script:"
+    echo "   python stt_from_mic_rust_server.py --url ${TUNNEL_URL/https:/ws:} --api-key $ACTUAL_API_KEY"
+    echo ""
+    echo "💻 For your team (JavaScript):"
+    echo "   const ws = new WebSocket('${TUNNEL_URL/https:/wss:}/ws/live');"
+    echo "   // Add API key in headers: {'kyutai-api-key': '$ACTUAL_API_KEY'}"
+else
+    echo "⚠️  Cloudflare tunnel URL detection failed"
+    echo "   Check manually: ps aux | grep cloudflared"
+    echo "   Look for: https://something.trycloudflare.com in the logs above"
+    echo ""
+    echo "🖥️  MANUAL COMMANDS (replace TUNNEL_URL with actual URL):"
+    echo "   python kyutai-stt-client.py --url wss://TUNNEL_URL --api-key $ACTUAL_API_KEY"
+fi
     echo ""
     echo "🎉 PRODUCTION DEPLOYMENT COMPLETED!"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
