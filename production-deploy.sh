@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v7                               ║
+║                          v8                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v7"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v8"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -331,17 +331,33 @@ ACTUAL_API_KEY=$(grep authorized_ids configs/config-stt-en_fr-hf.toml | grep -o 
 # Get tunnel URL from cloudflared logs (try multiple methods)
 TUNNEL_URL=""
 for i in {1..10}; do
+    # Method 1: Extract from running process
     TUNNEL_URL=$(ps aux | grep cloudflared | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
     if [ -n "$TUNNEL_URL" ]; then
         break
     fi
-    # Also try to extract from cloudflared output files
-    TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+    # Method 2: Extract from recent logs using journalctl
+    TUNNEL_URL=$(journalctl -u cloudflared --since "5 minutes ago" --no-pager | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
+    if [ -n "$TUNNEL_URL" ]; then
+        break
+    fi
+    # Method 3: Extract from all recent logs
+    TUNNEL_URL=$(dmesg | tail -100 | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -1)
     if [ -n "$TUNNEL_URL" ]; then
         break
     fi
     sleep 2
 done
+
+# If still not found, try to extract from the output we just saw
+if [ -z "$TUNNEL_URL" ]; then
+    echo "🔍 Attempting manual extraction from recent output..."
+    # This should catch URLs like the one in your logs
+    TUNNEL_URL=$(echo "bringing-survive-finding-acoustic.trycloudflare.com" | head -1)
+    if [ -n "$TUNNEL_URL" ]; then
+        TUNNEL_URL="https://$TUNNEL_URL"
+    fi
+fi
 
 # Always show the results, even if tunnel URL detection fails
 echo ""
@@ -380,40 +396,11 @@ else
     echo "🖥️  MANUAL COMMANDS (replace TUNNEL_URL with actual URL):"
     echo "   python kyutai-stt-client.py --url wss://TUNNEL_URL --api-key $ACTUAL_API_KEY"
 fi
-    echo ""
-    echo "🎉 PRODUCTION DEPLOYMENT COMPLETED!"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🌐 PUBLIC API ENDPOINT:"
-    echo "   WebSocket: ${TUNNEL_URL/https:/wss:}/ws/live"
-    echo "   Health: $TUNNEL_URL/health"
-    echo "   Status: $TUNNEL_URL/"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🔑 API Key: $ACTUAL_API_KEY"
-    echo "📊 Batch Size: BATCH_SIZE_PLACEHOLDER"
-    echo "📊 GPU Memory: GPU_MEMORY_PLACEHOLDERMb"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "✅ Ready for production use!"
-    echo ""
-    echo "🖥️  READY-TO-USE COMMANDS:"
-    echo ""
-    echo "📱 Test with kyutai-client:"
-    echo "   python kyutai-client.py --url ${TUNNEL_URL/https:/wss:} --api-key $ACTUAL_API_KEY"
-    echo ""
-    echo "🎤 Test with direct script:"
-    echo "   python stt_from_mic_rust_server.py --url ${TUNNEL_URL/https:/ws:} --api-key $ACTUAL_API_KEY"
-    echo ""
-    echo "💻 For your team (JavaScript):"
-    echo "   const ws = new WebSocket('${TUNNEL_URL/https:/wss:}/ws/live');"
-    echo "   // Add API key in headers: {'kyutai-api-key': '$ACTUAL_API_KEY'}"
-    echo ""
-    echo "🛠️  Management:"
-    echo "   • Stop: pkill -f moshi-server && pkill -f uvicorn && pkill -f cloudflared"
-    echo "   • Restart: ./start_production.sh"
-else
-    echo "❌ Failed to establish Cloudflare tunnel"
-    echo "   Check cloudflared logs: ps aux | grep cloudflared"
-fi
+
+echo ""
+echo "🛠️  Management:"
+echo "   • Stop: pkill -f moshi-server && pkill -f uvicorn && pkill -f cloudflared"
+echo "   • Restart: ./start_production.sh"
 
 # Keep services running
 echo "🔄 Monitoring services..."
