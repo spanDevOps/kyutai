@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v2.0                               ║
+║                          v3.0                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v2.0"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v3.0"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -62,7 +62,7 @@ fi
 log_info "Installing system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -qq
-apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake
+apt install -y -qq curl wget git build-essential pkg-config libssl-dev cmake python3-pip
 
 # Set up CUDA environment
 log_info "Setting up CUDA environment..."
@@ -163,7 +163,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Kyutai STT Production API", version="2.0.0")
+app = FastAPI(title="Kyutai STT Production API", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 MOSHI_SERVER_URL = "ws://localhost:8080/api/asr-streaming"
