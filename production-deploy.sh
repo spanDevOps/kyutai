@@ -27,13 +27,13 @@ cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                KYUTAI STT PRODUCTION DEPLOYER               ║
 ║                  Public API via Cloudflare                  ║
-║                          v9                               ║
+║                          v10                               ║
 ║                                                              ║
 ║  🌐 Direct public WebSocket API for production use          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 
-log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v9"
+log_success "🚀 KYUTAI STT PRODUCTION DEPLOYER v10"
 log_info "✅ Production-ready deployment with public API access"
 
 # Check if we're in a container
@@ -376,7 +376,7 @@ if [ -n "$TUNNEL_URL" ]; then
     echo "🖥️  READY-TO-USE COMMANDS:"
     echo ""
     echo "📱 Test with version-agnostic client:"
-    echo "   python kyutai-stt-client.py --url ${TUNNEL_URL/https:/wss:} --api-key $ACTUAL_API_KEY"
+    echo "   python kyutai-stt-client.py --url ${TUNNEL_URL/https:/wss:}/ws/live --api-key $ACTUAL_API_KEY"
     echo ""
     echo "🎤 Test with original script:"
     echo "   python stt_from_mic_rust_server.py --url ${TUNNEL_URL/https:/ws:} --api-key $ACTUAL_API_KEY"
